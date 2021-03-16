@@ -1,0 +1,4 @@
+build/*
+dist/*
+stockfish/*
+__pycache__/*
