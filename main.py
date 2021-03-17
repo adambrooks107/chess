@@ -9,6 +9,7 @@ from Pieces import *
 import math
 import cv2
 import numpy
+import asyncio
 
 from svglib.svglib import svg2rlg
 
@@ -53,7 +54,6 @@ def highlight_move(move):
 
 # perform the move and call highlight_move
 def make_move(move):
-    print(move)
     highlight_move(move)
     board.push(move)
 
@@ -86,8 +86,20 @@ def create_arrow(start, end):
 
     return (bottom_left, bottom_right, top_right, top_left), (triangle_right, triangle_top, triangle_left)
 
+# create an arrow when given a chess.Move object
+def create_arrow_from_move(move):
+    move_str = str(move)
+    from_pos = move_str[:2]
+    to_pos = move_str[2:4]
+    for s in square_list:
+        if s.name == from_pos:
+            from_square = s
+        if s.name == to_pos:
+            to_square = s
+    return create_arrow(from_square.rect.center, to_square.rect.center)
+
 # create_arrow didn't draw the point of the arrow to the middle of the square. This let's me mathematically 
-# find a point between two vertices in 2D space to make the arrow shorter.
+# find a point on the same line to make the arrow shorter.
 def point_between(start, end, distance):
     d = math.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
     dt = d - distance
@@ -96,6 +108,19 @@ def point_between(start, end, distance):
         return ((1 - t)*start[0] + t*end[0]), ((1 - t)*start[1] + t*end[1])
     else:
         return -1
+
+# use chess.engine.analyse to create a list of arrows for the best moves
+async def analyse_board(engine):
+    result = await engine.analyse(board, chess.engine.Limit(time=0.2), multipv=4)
+    analysis_arrow_list = []
+    for info in result:
+        line = info.get("pv")
+        score = info.get("score")
+        arw = create_arrow_from_move(line[0])
+        if arw:
+            analysis_arrow_list.append(arw)
+    
+    return analysis_arrow_list
 
 # finds where each piece is on the current board and creates them
 def createPieces():
@@ -154,6 +179,10 @@ def createPieces():
 board = chess.Board()
 (width, height) = (800, 800)
 background_colour = (255, 255, 255)
+arrow_colour = (255, 255, 49)
+analysis_arrow_colour_r = 0
+analysis_arrow_colour_g = 204
+analysis_arrow_colour_b = 0
 
 screen = pygame.display.set_mode((width, height))
 pygame.display.set_caption('Chess')
@@ -196,16 +225,15 @@ piece_list = createPieces()
 
 pygame.display.flip()
 
-#stockfish = chess.engine.SimpleEngine.popen_uci("C:/Users/adamb/projects/chessEngine/stockfish/stockfish_13_win_x64_bmi2.exe")
-
-
-def main():
+async def main() -> None:
+    transport, stockfish = await chess.engine.popen_uci("C:/Users/adamb/projects/chess/stockfish/stockfish_13_win_x64_bmi2.exe")
     run = True
     piece_sprite = ""
     piece_dragging = False
     start_arrow = 0
     end_arrow = 0
     arrow_list = []
+    analysis_arrow_list = []
     global piece_list
     legal_moves = []
     legal_dests = []
@@ -217,7 +245,6 @@ def main():
             if event.type == pygame.QUIT:
                 run = False
             # if not board.turn:
-            #     result = stockfish.play(board, chess.engine.Limit(time=0.1))
             #     make_move(result.move)
             #     piece_list = createPieces()
             # left and right arrows move through the move list
@@ -231,6 +258,7 @@ def main():
                         else:
                             highlight_move("")
                         piece_list = createPieces()
+                        analysis_arrow_list = await analyse_board(stockfish)
                 if event.key == pygame.K_RIGHT:
                     if all_moves:
                         last_move = all_moves[len(all_moves)-1]
@@ -238,6 +266,7 @@ def main():
                         all_moves.remove(last_move)
                         highlight_move(last_move)
                         piece_list = createPieces()
+                        analysis_arrow_list = await analyse_board(stockfish)
             # check if checkmate
             if board.is_checkmate():
                 green_surface = pygame.Surface((width, height))
@@ -302,7 +331,8 @@ def main():
                         # left click
                         if event.button == 1:
                             # reset the cursor
-                            pygame.mouse.set_cursor(0)
+                            if s.piece is None:
+                                pygame.mouse.set_cursor(0)
                             piece_dragging = False
                             if legal_moves:
                                 # check if moving a piece
@@ -311,6 +341,8 @@ def main():
                                     move = legal_moves[move_index]
                                     # perform the move
                                     make_move(move)
+                                    # analyse the best moves and create arrows
+                                    analysis_arrow_list = await analyse_board(stockfish)
                                     all_moves = []
                                     legal_moves, legal_dests = [], []
                                     
@@ -335,13 +367,23 @@ def main():
             refresh_screen()
             if arrow_list:
                 for arrow in arrow_list:
-                    gfxdraw.aapolygon(screen, arrow[0], (0, 0, 0))
-                    gfxdraw.filled_polygon(screen, arrow[0], (0, 0, 0))
-                    gfxdraw.aapolygon(screen, arrow[1], (0, 0, 0))
-                    gfxdraw.filled_polygon(screen, arrow[1], (0, 0, 0))
+                    gfxdraw.aapolygon(screen, arrow[0], arrow_colour)
+                    gfxdraw.filled_polygon(screen, arrow[0], arrow_colour)
+                    gfxdraw.aapolygon(screen, arrow[1], arrow_colour)
+                    gfxdraw.filled_polygon(screen, arrow[1], arrow_colour)
+            if analysis_arrow_list:
+                green = analysis_arrow_colour_g
+                for arrow in analysis_arrow_list:
+                    gfxdraw.aapolygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                    gfxdraw.filled_polygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                    gfxdraw.aapolygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                    gfxdraw.filled_polygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                    green = green - 50
             pygame.display.flip()
     pygame.quit()
-    #stockfish.quit()
+    await stockfish.quit()
 
 if __name__ == "__main__":
-    main()
+    asyncio.set_event_loop_policy(chess.engine.EventLoopPolicy())
+    asyncio.run(main())
+    #main()
