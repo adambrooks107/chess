@@ -4,7 +4,7 @@ block_cipher = None
 
 
 a = Analysis(['main.py'],
-             pathex=['C:\\Users\\adamb\\projects\\chessEngine'],
+             pathex=['C:\\Users\\adamb\\projects\\chess'],
              binaries=[],
              datas=[('assets', 'assets')],
              hiddenimports=[],

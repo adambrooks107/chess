@@ -2,3 +2,4 @@ build/*
 dist/*
 stockfish/*
 __pycache__/*
+test.py

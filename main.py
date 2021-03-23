@@ -9,9 +9,7 @@ from Pieces import *
 import math
 import cv2
 import numpy
-import asyncio
-
-from svglib.svglib import svg2rlg
+import threading
 
 #-------------------------------------------------------------------------------- START FUNCTIONS --------------------------------------------------------------------------------#
 # draw the border first, followed by the squares, followed by the pieces
@@ -107,20 +105,7 @@ def point_between(start, end, distance):
         t = dt / d
         return ((1 - t)*start[0] + t*end[0]), ((1 - t)*start[1] + t*end[1])
     else:
-        return -1
-
-# use chess.engine.analyse to create a list of arrows for the best moves
-async def analyse_board(engine):
-    result = await engine.analyse(board, chess.engine.Limit(time=0.2), multipv=4)
-    analysis_arrow_list = []
-    for info in result:
-        line = info.get("pv")
-        score = info.get("score")
-        arw = create_arrow_from_move(line[0])
-        if arw:
-            analysis_arrow_list.append(arw)
-    
-    return analysis_arrow_list
+        return -1    
 
 # finds where each piece is on the current board and creates them
 def createPieces():
@@ -174,6 +159,42 @@ def createPieces():
             piece_list.add(piece)
     return piece_list
 
+# RUN IN SEPERATE THREAD
+# use chess.engine.analysis to infinitely analyse a position until the next move is played
+def analyse_board():
+    current_turn = board.turn
+    # analyse 4 branches creating the top 4 best moves
+    with engine.analysis(board, multipv=4) as analysis:
+        for info in analysis:
+            line = info.get("pv")
+            score = info.get("score")
+            if line:
+                if info.get("multipv") == 1:
+                    arw = create_arrow_from_move(line[0])
+                    if arw:
+                        best_moves.update({"bestMove": arw})
+                elif info.get("multipv") == 2:
+                    arw = create_arrow_from_move(line[0])
+                    if arw:
+                        best_moves.update({"2Move": arw})
+                elif info.get("multipv") == 3:
+                    arw = create_arrow_from_move(line[0])
+                    if arw:
+                        best_moves.update({"3Move": arw})
+                elif info.get("multipv") == 4:
+                    arw = create_arrow_from_move(line[0])
+                    if arw:
+                        best_moves.update({"4Move": arw})
+            # analyse until a move is played or game is exited
+            
+            if current_turn != board.turn or not run:
+                break
+    if not run:
+        engine.quit()
+        return
+
+    return analyse_board()
+
 #-------------------------------------------------------------------------------- END FUNCTIONS --------------------------------------------------------------------------------#
 
 board = chess.Board()
@@ -185,6 +206,7 @@ analysis_arrow_colour_g = 204
 analysis_arrow_colour_b = 0
 
 screen = pygame.display.set_mode((width, height))
+clock = pygame.time.Clock()
 pygame.display.set_caption('Chess')
 screen.fill(background_colour)
 
@@ -225,16 +247,25 @@ piece_list = createPieces()
 
 pygame.display.flip()
 
-async def main() -> None:
-    transport, stockfish = await chess.engine.popen_uci("C:/Users/adamb/projects/chess/stockfish/stockfish_13_win_x64_bmi2.exe")
-    run = True
+best_moves = {
+    "bestMove": "",
+    "2Move": "",
+    "3Move": "",
+    "4Move": ""
+}
+
+run = True
+engine = chess.engine.SimpleEngine.popen_uci("C:/Users/adamb/projects/chess/stockfish/stockfish_13_win_x64_bmi2.exe")
+
+def main():
     piece_sprite = ""
     piece_dragging = False
     start_arrow = 0
     end_arrow = 0
     arrow_list = []
-    analysis_arrow_list = []
     global piece_list
+    global best_moves
+    global run
     legal_moves = []
     legal_dests = []
     all_moves = []
@@ -258,7 +289,6 @@ async def main() -> None:
                         else:
                             highlight_move("")
                         piece_list = createPieces()
-                        analysis_arrow_list = await analyse_board(stockfish)
                 if event.key == pygame.K_RIGHT:
                     if all_moves:
                         last_move = all_moves[len(all_moves)-1]
@@ -266,7 +296,6 @@ async def main() -> None:
                         all_moves.remove(last_move)
                         highlight_move(last_move)
                         piece_list = createPieces()
-                        analysis_arrow_list = await analyse_board(stockfish)
             # check if checkmate
             if board.is_checkmate():
                 green_surface = pygame.Surface((width, height))
@@ -341,8 +370,13 @@ async def main() -> None:
                                     move = legal_moves[move_index]
                                     # perform the move
                                     make_move(move)
+                                    best_moves = {
+                                        "bestMove": "",
+                                        "2Move": "",
+                                        "3Move": "",
+                                        "4Move": ""
+                                    }
                                     # analyse the best moves and create arrows
-                                    analysis_arrow_list = await analyse_board(stockfish)
                                     all_moves = []
                                     legal_moves, legal_dests = [], []
                                     
@@ -364,26 +398,27 @@ async def main() -> None:
 
             # for each event
             highlight_checks()
-            refresh_screen()
-            if arrow_list:
-                for arrow in arrow_list:
-                    gfxdraw.aapolygon(screen, arrow[0], arrow_colour)
-                    gfxdraw.filled_polygon(screen, arrow[0], arrow_colour)
-                    gfxdraw.aapolygon(screen, arrow[1], arrow_colour)
-                    gfxdraw.filled_polygon(screen, arrow[1], arrow_colour)
-            if analysis_arrow_list:
-                green = analysis_arrow_colour_g
-                for arrow in analysis_arrow_list:
-                    gfxdraw.aapolygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
-                    gfxdraw.filled_polygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
-                    gfxdraw.aapolygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
-                    gfxdraw.filled_polygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
-                    green = green - 50
-            pygame.display.flip()
+            
+        refresh_screen()
+        if best_moves["4Move"]:
+            green = analysis_arrow_colour_g
+            for arrow in best_moves.values():
+                gfxdraw.aapolygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                gfxdraw.filled_polygon(screen, arrow[0], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                gfxdraw.aapolygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                gfxdraw.filled_polygon(screen, arrow[1], (analysis_arrow_colour_r, green, analysis_arrow_colour_b))
+                green = green - 50
+        if arrow_list:
+            for arrow in arrow_list:
+                gfxdraw.aapolygon(screen, arrow[0], arrow_colour)
+                gfxdraw.filled_polygon(screen, arrow[0], arrow_colour)
+                gfxdraw.aapolygon(screen, arrow[1], arrow_colour)
+                gfxdraw.filled_polygon(screen, arrow[1], arrow_colour)
+        pygame.display.flip()
+        clock.tick(60)
     pygame.quit()
-    await stockfish.quit()
 
 if __name__ == "__main__":
-    asyncio.set_event_loop_policy(chess.engine.EventLoopPolicy())
-    asyncio.run(main())
-    #main()
+    t = threading.Thread(target=analyse_board)
+    t.start()
+    main()
